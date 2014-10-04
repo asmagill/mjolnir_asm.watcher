@@ -2,25 +2,37 @@
 #import <Carbon/Carbon.h>
 #import <lauxlib.h>
 
-static NSMutableIndexSet* handlers;
+// Common Code
 
-static int store_watcher_path(lua_State* L, int idx) {
+#define USERDATA_TAG    "mjolnir._asm.watcher.path"
+
+static int store_udhandler(lua_State* L, NSMutableIndexSet* theHandler, int idx) {
     lua_pushvalue(L, idx);
     int x = luaL_ref(L, LUA_REGISTRYINDEX);
-    [handlers addIndex: x];
+    [theHandler addIndex: x];
     return x;
 }
 
-static void remove_watcher_path(lua_State* L, int x) {
+static void remove_udhandler(lua_State* L, NSMutableIndexSet* theHandler, int x) {
     luaL_unref(L, LUA_REGISTRYINDEX, x);
-    [handlers removeIndex: x];
+    [theHandler removeIndex: x];
 }
+
+static void* push_udhandler(lua_State* L, int x) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, x);
+    return lua_touserdata(L, -1);
+}
+
+// Not so common code
+
+static NSMutableIndexSet* pathHandlers;
 
 typedef struct _watcher_path_t {
     lua_State* L;
     int closureref;
     FSEventStreamRef stream;
     int self;
+    bool started;
 } watcher_path_t;
 
 void event_callback(ConstFSEventStreamRef streamRef, void *clientCallBackInfo, size_t numEvents, void *eventPaths, const FSEventStreamEventFlags eventFlags[], const FSEventStreamEventId eventIds[]) {
@@ -53,8 +65,9 @@ static int watcher_path_new(lua_State* L) {
     watcher_path_t* watcher_path = lua_newuserdata(L, sizeof(watcher_path_t));
     watcher_path->L = L;
     watcher_path->closureref = closureref;
+    watcher_path->started = NO;
 
-    lua_getfield(L, LUA_REGISTRYINDEX, "mjolnir._asm.watcher.path");
+    lua_getfield(L, LUA_REGISTRYINDEX, USERDATA_TAG);
     lua_setmetatable(L, -2);
 
     FSEventStreamContext context;
@@ -78,76 +91,88 @@ static int watcher_path_new(lua_State* L) {
 /// Method
 /// Registers watcher's fn as a callback for when watcher's path or any descendent changes.
 static int watcher_path_start(lua_State* L) {
-    watcher_path_t* watcher_path = luaL_checkudata(L, 1, "mjolnir._asm.watcher.path");
+    watcher_path_t* watcher_path = luaL_checkudata(L, 1, USERDATA_TAG);
+    lua_settop(L, 1);
 
-    watcher_path->self = store_watcher_path(L, 1);
+    if (watcher_path->started) return 1;
+    watcher_path->started = YES;
+
+    watcher_path->self = store_udhandler(L, pathHandlers, 1);
     FSEventStreamScheduleWithRunLoop(watcher_path->stream, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
     FSEventStreamStart(watcher_path->stream);
 
-    return 0;
+    return 1;
 }
 
 /// mjolnir._asm.watcher.path:stop()
 /// Method
 /// Unregisters watcher's fn so it won't be called again until the watcher.path is restarted.
 static int watcher_path_stop(lua_State* L) {
-    watcher_path_t* watcher_path = luaL_checkudata(L, 1, "mjolnir._asm.watcher.path");
+    watcher_path_t* watcher_path = luaL_checkudata(L, 1, USERDATA_TAG);
+    lua_settop(L, 1);
 
-    remove_watcher_path(L, watcher_path->self);
+    if (!watcher_path->started) return 1;
+
+    watcher_path->started = NO;
+    remove_udhandler(L, pathHandlers, watcher_path->self);
     FSEventStreamStop(watcher_path->stream);
     FSEventStreamUnscheduleFromRunLoop(watcher_path->stream, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
 
-//    FSEventStreamInvalidate(watcher_path->stream);
-//    FSEventStreamRelease(watcher_path->stream);
-
-    return 0;
+    return 1;
 }
 
-// /// mjolnir._asm.watcher.path.stopall()
-// /// Calls mjolnir._asm.watcher.path:stop() for all started watchers; called automatically when user config reloads.
-// static int watcher_path_stopall(lua_State* L) {
-//     lua_getglobal(L, "mjolnir._asm.watcher.path");
-//     lua_getfield(L, -1, "stop");
-//     hydra_remove_all_handlers(L, "mjolnir._asm.watcher.path");
-//     return 0;
-// }
-
 static int watcher_path_gc(lua_State* L) {
-    watcher_path_t* watcher_path = luaL_checkudata(L, 1, "mjolnir._asm.watcher.path");
+    watcher_path_t* watcher_path = luaL_checkudata(L, 1, USERDATA_TAG);
 
-// need a way to check if it's already been stopped... probably easy, but it's late.
-// also can we filter at all (no sublevels, file pattern ,etc.)?
-// also can we get "what" happened, rather than just "this file here"?
-
-    remove_watcher_path(L, watcher_path->self);
-    FSEventStreamStop(watcher_path->stream);
+    if (watcher_path->started) {
+        watcher_path->started = NO;
+        remove_udhandler(L, pathHandlers, watcher_path->self);
+        FSEventStreamStop(watcher_path->stream);
+        FSEventStreamUnscheduleFromRunLoop(watcher_path->stream, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    }
     FSEventStreamInvalidate(watcher_path->stream);
     FSEventStreamRelease(watcher_path->stream);
-//
+
     luaL_unref(L, LUA_REGISTRYINDEX, watcher_path->closureref);
     return 0;
 }
 
-static const luaL_Reg watcher_pathlib[] = {
-    {"_new", watcher_path_new},
-//     {"stopall", watcher_path_stopall},
+static int meta_gc(lua_State* L) {
+    [pathHandlers release];
+    return 0;
+}
 
-    {"start", watcher_path_start},
-    {"stop", watcher_path_stop},
+// Metatable for created objects when _new invoked
+static const luaL_Reg path_metalib[] = {
+    {"start",   watcher_path_start},
+    {"stop",    watcher_path_stop},
+    {"__gc",    watcher_path_gc},
+    {NULL,      NULL}
+};
 
-    {"__gc", watcher_path_gc},
+// Functions for returned object when module loads
+static const luaL_Reg pathLib[] = {
+    {"_new",    watcher_path_new},
+    {NULL,      NULL}
+};
 
-    {NULL, NULL}
+// Metatable for returned object when module loads
+static const luaL_Reg meta_gcLib[] = {
+    {"__gc",    meta_gc},
+    {NULL,      NULL}
 };
 
 int luaopen_mjolnir__asm_watcher_path_internal(lua_State* L) {
-    luaL_newlib(L, watcher_pathlib);
+// Metatable for created objects
+    luaL_newlib(L, path_metalib);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -2, "__index");
+        lua_setfield(L, LUA_REGISTRYINDEX, USERDATA_TAG);
 
-    lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, "mjolnir._asm.watcher.path");
-
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
+// Create table for luaopen
+    luaL_newlib(L, pathLib);
+        luaL_newlib(L, meta_gcLib);
+        lua_setmetatable(L, -2);
 
     return 1;
 }

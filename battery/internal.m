@@ -90,8 +90,8 @@ static int battery_watcher_stop(lua_State* L) {
     lua_settop(L, 1);
 
     if (!watcher->started) return 1;
-    watcher->started = NO;
 
+    watcher->started = NO;
     remove_udhandler(L, batteryHandlers, watcher->self);
     CFRunLoopRemoveSource(CFRunLoopGetMain(), watcher->t, kCFRunLoopCommonModes);
     return 1;
@@ -100,6 +100,11 @@ static int battery_watcher_stop(lua_State* L) {
 static int battery_watcher_gc(lua_State* L) {
     battery_watcher_t* watcher = luaL_checkudata(L, 1, USERDATA_TAG);
 
+    if (watcher->started) {
+        watcher->started = NO;
+        remove_udhandler(L, batteryHandlers, watcher->self);
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), watcher->t, kCFRunLoopCommonModes);
+    }
     luaL_unref(L, LUA_REGISTRYINDEX, watcher->fn);
     CFRunLoopSourceInvalidate(watcher->t);
     CFRelease(watcher->t);
@@ -127,7 +132,7 @@ static const luaL_Reg batteryLib[] = {
 
 // Metatable for returned object when module loads
 static const luaL_Reg meta_gcLib[] = {
-    {"__gc",    battery_watcher_stopall},
+    {"__gc",    meta_gc},
     {NULL,      NULL}
 };
 
