@@ -1,5 +1,5 @@
 PREFIX ?= /usr/local
-MODULE = watcher/path
+MODULE = timer
 LUAFILE  = init.lua
 OBJCFILE = internal.m
 HEADERS   = 
