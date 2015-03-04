@@ -8,10 +8,10 @@ The following submodules are located in this repository for organizational purpo
 
 |Module                        | Available | Description                                        |
 |:-----------------------------|:---------:|:---------------------------------------------------|
-|mjolnir._asm.watcher.battery  | Luarocks  | Watch for screen layout changes in Mjolnir.        |
+|mjolnir._asm.watcher.battery  | Luarocks  | Functions for watching battery state changes.      |
 |mjolnir._asm.pathwatcher      | Luarocks  | Watch paths recursively for changes.               |
 |mjolnir._asm.timer            | Luarocks  | Execute functions with various timing rules.       |
-|mjolnir._asm.watcher.screen   | Luarocks  | Functions for watching battery state changes.      |
+|mjolnir._asm.watcher.screen   | Luarocks  | Watch for screen layout changes in Mjolnir.        |
 
 **NOTE: README's for in progress modules may mention luarocks, but may or may not actually be there.  Be patient, or check the README file for how to compile them yourself.**
 
